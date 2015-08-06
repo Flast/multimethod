@@ -1,0 +1,14 @@
+{
+    "key": "functional/multimethod",
+    "name": "Functional/Multimethod",
+    "authors": [
+        "Kohei Takahashi"
+    ],
+    "description": "Function object which allows multiple dispatch.",
+    "category": [
+        "Function-objects"
+    ],
+    "maintainers": [
+        "Kohei Takahashi <flast -at- flast.jp>"
+    ]
+}
