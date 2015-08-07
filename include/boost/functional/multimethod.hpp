@@ -8,7 +8,6 @@
 #define BOOST_FUNCTIONAL_MULTIMETHOD_HPP_
 
 #include <utility>
-#include <memory>
 #include <type_traits>
 #include <typeinfo>
 #include <stdexcept>
@@ -20,68 +19,93 @@
 
 namespace boost {
 
-template <typename FT> class multimethod;
+namespace mm_detail {
+
+template <typename FT> struct arg_tuple;
+template <typename R, typename ...T>
+struct arg_tuple<R(T...)>
+{
+    typedef std::tuple<T...> type;
+    static constexpr type* value = nullptr;
+};
+
+} // namespace boost::mm_detail
+
+namespace functional {
+
+template <typename ...T>
+using type_tuple = std::tuple<T...>*;
+
+template <typename FT> struct strict;
 
 template <typename R, typename ...T>
-class multimethod<R(T...)>
+struct strict<R(T...)>
 {
-    struct method_base
+    std::tuple<decltype(typeid(T))...> _ti_tuple;
+
+    template <typename ...Tm>
+    explicit
+    strict(type_tuple<Tm...>) noexcept
+      : _ti_tuple(typeid(Tm)...)
     {
-        std::tuple<decltype(typeid(T)) const&...> ti_tuple;
+    }
 
-        explicit
-        method_base(decltype(ti_tuple) ti_tuple) noexcept : ti_tuple(ti_tuple) {}
+    template <typename ...A>
+    bool operator()(A&&... a) const noexcept
+    {
+        return _ti_tuple == std::tie(typeid(a)...);
+    }
 
-        virtual ~method_base() noexcept = default;
+    template <typename FT, typename F>
+    struct bind;
 
-        virtual R operator()(T&&...) const = 0;
-
-        bool is_eligible(decltype(typeid(T)) const&... info) const noexcept
-        {
-            return ti_tuple == std::tie(info...);
-        }
-    };
-
-    template <typename> struct method;
-
-    template <typename Rm, typename ...Tm>
-    struct method<Rm(Tm...)> : method_base
+    template <typename Rm, typename ...Tm, typename F>
+    struct bind<Rm(Tm...), F>
     {
         static_assert(std::is_convertible<Rm, R>::value, "");
 
-        std::function<Rm(Tm...)> f;
+        F _raw_func;
 
-        template <typename Functor>
-        method(Functor&& f)
-          : method_base(std::tie(typeid(Tm)...)), f(std::forward<Functor>(f)) {}
-
-        R operator()(T&&... a) const override
+        R operator()(T&&... a) const
         {
-            return f(static_cast<Tm&&>(a)...);
+            return _raw_func(static_cast<Tm&&>(a)...);
         }
     };
+};
 
-    std::vector<std::unique_ptr<method_base>> methods;
+} // namespace boost::functional
+
+template <typename FT, typename Policy = functional::strict<FT>>
+class multimethod;
+
+template <typename R, typename ...T, typename Policy>
+class multimethod<R(T...), Policy>
+{
+    std::vector<std::tuple<Policy, std::function<R(T...)>>> methods;
 
 public:
     R operator()(T&&... a) const
     {
-        const auto filter = [&a...](std::unique_ptr<method_base> const& mp)
+        const auto filter = [&a...](typename decltype(methods)::const_reference m)
         {
-            return mp->is_eligible(typeid(a)...);
+            return std::get<0>(m)(a...);
         };
         const auto itr = std::find_if(std::begin(methods), std::end(methods), filter);
         if (itr == std::end(methods))
         {
             throw std::runtime_error("No candidates found");
         }
-        return (**itr)(std::forward<T>(a)...);
+        return std::get<1>(*itr)(std::forward<T>(a)...);
     }
 
     template <typename FT, typename Functor>
     void add_rule(Functor&& f)
     {
-        methods.push_back(std::unique_ptr<method_base>(new method<FT>{std::forward<Functor>(f)}));
+        using bind = typename Policy::template bind<FT, Functor>;
+        methods.emplace_back(
+            Policy{mm_detail::arg_tuple<FT>::value},
+            bind{std::forward<Functor>(f)}
+        );
     }
 };
 
