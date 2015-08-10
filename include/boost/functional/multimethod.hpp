@@ -21,20 +21,19 @@ namespace boost {
 
 namespace mm_detail {
 
+template <typename ...T>
+using type_tuple = std::tuple<T...>*;
+
 template <typename FT> struct arg_tuple;
 template <typename R, typename ...T>
 struct arg_tuple<R(T...)>
 {
-    typedef std::tuple<T...> type;
-    static constexpr type* value = nullptr;
+    static constexpr type_tuple<T...> value = nullptr;
 };
 
 } // namespace boost::mm_detail
 
 namespace functional {
-
-template <typename ...T>
-using type_tuple = std::tuple<T...>*;
 
 template <typename FT> struct strict;
 
@@ -45,7 +44,7 @@ struct strict<R(T...)>
 
     template <typename ...Tm>
     explicit
-    strict(type_tuple<Tm...>) noexcept
+    strict(mm_detail::type_tuple<Tm...>) noexcept
       : _ti_tuple(typeid(Tm)...)
     {
     }
