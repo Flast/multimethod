@@ -17,9 +17,7 @@
 #include <iterator>
 #include <algorithm>
 
-namespace boost {
-
-namespace mm_detail {
+namespace multimethod_detail {
 
 template <typename ...T>
 using type_tuple = std::tuple<T...>*;
@@ -31,7 +29,121 @@ struct arg_tuple<R(T...)>
     static constexpr type_tuple<T...> value = nullptr;
 };
 
-} // namespace boost::mm_detail
+
+template <typename T>
+using remove_reference_t = typename std::remove_reference<T>::type;
+
+template <typename T>
+using remove_pointer_t = typename std::remove_pointer<T>::type;
+
+template <typename T, typename U = void>
+using enable_if_t = typename std::enable_if<T::value, U>::type;
+
+
+template <typename T>
+inline constexpr bool is_polymorphic_pointer() noexcept
+{
+    return std::is_pointer<T>::value && std::is_polymorphic<remove_pointer_t<T>>::value;
+}
+
+template <typename T>
+inline constexpr bool is_polymorphic_reference() noexcept
+{
+    return std::is_reference<T>::value && std::is_polymorphic<remove_reference_t<T>>::value;
+}
+
+enum proxy_type
+{
+    polymorphic_pointer,
+    polymorphic_reference,
+    non_polymorphic,
+};
+
+template <typename T>
+inline constexpr proxy_type type() noexcept
+{
+    return is_polymorphic_pointer<T>()    ? polymorphic_pointer :
+           is_polymorphic_reference<T>()  ? polymorphic_reference :
+                                            non_polymorphic;
+}
+
+template <typename T, proxy_type = type<T>()>
+struct proxy;
+
+template <typename T>
+struct proxy<T, polymorphic_pointer>
+{
+    std::type_info const& ti;
+
+    template <typename U> using rebind = proxy<U, polymorphic_pointer>;
+
+    proxy() noexcept : ti(typeid(T)) {}
+    explicit proxy(T v) noexcept : ti(typeid(v)) {}
+    template <typename U>
+    proxy(rebind<U> const& other) noexcept : ti(other.ti) {}
+
+    template <typename U>
+    friend bool operator==(proxy const& lhs, rebind<U> const& rhs) noexcept
+    {
+        return lhs.ti == rhs.ti;
+    }
+
+    template <typename U>
+    bool is_convertible(U* v) const noexcept
+    {
+        return dynamic_cast<T>(v) != nullptr;
+    }
+};
+
+template <typename T>
+struct proxy<T, polymorphic_reference>
+{
+    std::type_info const& ti;
+
+    template <typename U> using rebind = proxy<U, polymorphic_reference>;
+
+    proxy() noexcept : ti(typeid(T)) {}
+    explicit proxy(T v) noexcept : ti(typeid(v)) {}
+    template <typename U>
+    proxy(rebind<U> const& other) noexcept : ti(other.ti) {}
+
+    template <typename U>
+    friend bool operator==(proxy const& lhs, rebind<U> const& rhs) noexcept
+    {
+        return lhs.ti == rhs.ti;
+    }
+
+    template <typename U>
+    bool is_convertible(U&& v) const noexcept
+    {
+        return dynamic_cast<remove_reference_t<T>*>(&v) != nullptr;
+    }
+};
+
+template <typename T>
+struct proxy<T, non_polymorphic>
+{
+    template <typename U> using rebind = proxy<U, non_polymorphic>;
+
+    constexpr proxy() noexcept = default;
+    explicit constexpr proxy(T const& v) noexcept {}
+
+    template <typename U>
+    friend constexpr bool operator==(proxy const&, rebind<U> const&) noexcept
+    {
+        return std::is_convertible<U, T>::value;
+    }
+
+    template <typename U>
+    constexpr bool is_convertible(U&& v) const noexcept
+    {
+        return std::is_convertible<U, T>::value;
+    }
+};
+
+} // namespace multimethod_detail
+
+namespace boost {
 
 namespace functional {
 
@@ -40,19 +152,19 @@ template <typename FT> struct strict;
 template <typename R, typename ...T>
 struct strict<R(T...)>
 {
-    std::tuple<decltype(typeid(T))...> _ti_tuple;
+    std::tuple<::multimethod_detail::proxy<T>...> _ti_tuple;
 
     template <typename ...Tm>
     explicit
-    strict(mm_detail::type_tuple<Tm...>) noexcept
-      : _ti_tuple(typeid(Tm)...)
+    strict(::multimethod_detail::type_tuple<Tm...>) noexcept
+        : _ti_tuple(::multimethod_detail::proxy<Tm>{}...)
     {
     }
 
     template <typename ...A>
     bool operator()(A&&... a) const noexcept
     {
-        return _ti_tuple == std::tie(typeid(a)...);
+        return _ti_tuple == std::forward_as_tuple(::multimethod_detail::proxy<A>{a}...);
     }
 
     template <typename FT, typename F>
@@ -102,7 +214,7 @@ public:
     {
         using bind = typename Policy::template bind<FT, Functor>;
         methods.emplace_back(
-            Policy{mm_detail::arg_tuple<FT>::value},
+            Policy{::multimethod_detail::arg_tuple<FT>::value},
             bind{std::forward<Functor>(f)}
         );
     }
